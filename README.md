@@ -3,689 +3,573 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Deal of Fate — Cassino (Phaser Prototype)</title>
-<!-- Phaser 3 CDN -->
+<title>Deal of Fate — Definitivo (Pixel + Cuphead Move)</title>
+<!-- Phaser 3 -->
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
 <style>
-  html,body{height:100%;margin:0;background:#06040a;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;color:#fff}
-  #gameContainer{display:flex;align-items:center;justify-content:center;height:100vh;padding:12px;box-sizing:border-box}
-  a,button{font-family:inherit}
-  /* small note overlay */
-  #note{position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.45);padding:8px 12px;border-radius:8px;font-size:13px;color:#dfeeff}
+  html,body{height:100%;margin:0;background:#0b0710;font-family:monospace;color:#fff}
+  #container{display:flex;align-items:center;justify-content:center;height:100vh;padding:12px;box-sizing:border-box}
+  #note{position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.5);padding:8px 12px;border-radius:8px;font-size:13px;color:#ffd166;z-index:9999}
 </style>
 </head>
 <body>
-<div id="gameContainer"></div>
-<div id="note">Clique para ativar som • Controles: WASD/SETAS mover • E interagir • K atirar • L loja • M mudo</div>
+<div id="container"></div>
+<div id="note">Clique para ativar som • WASD mover • W pular • Shift dash • K atirar • E interagir • L loja • M mudo</div>
 
 <script>
-/* Deal of Fate — Phaser single-file prototype
-   - Procedural textures (no external images)
-   - World-exploration casino, shop, bosses, keys -> final boss unlocked
-   - Dialogues typewriter-style, particles, simple SFX via WebAudio
-   - Copy-paste to index.html and publish on GitHub Pages
+/*
+ Deal of Fate — Definitive single-file
+ - Pixel-art style (procedural sprites) + arcade movement (dash) like Cuphead
+ - Phaser 3, single HTML file
+ - World exploration, shop, boss rooms, keys unlock final boss
+ - Improved boss fights (patterns, telegraphs, transforms)
+ - SFX via WebAudio, no external assets needed
 */
 
-// ---------- Simple WebAudio Manager for music & SFX ----------
-class AudioEngine {
-  constructor(){
-    this.ctx = null;
-    this.master = null;
-    this.musicGain = null;
-    this.muted = false;
-    this._musicNodes = [];
+// ---------- Helper: Simple WebAudio for SFX & ambient ----------
+class Sfx {
+  constructor(){ this.ctx = null; this.master=null; this.musicGain=null; this.muted=false; this._musicOsc=[]; }
+  init(){ if(this.ctx) return; this.ctx = new (window.AudioContext||window.webkitAudioContext)(); this.master=this.ctx.createGain(); this.musicGain=this.ctx.createGain(); this.master.connect(this.ctx.destination); this.musicGain.connect(this.master); this.master.gain.value=0.9; this.musicGain.gain.value=0.14; this._ambient(); }
+  _ambient(){
+    const o = this.ctx.createOscillator(); o.type='sine'; o.frequency.value=110;
+    const g = this.ctx.createGain(); g.gain.value=0.02; o.connect(g); g.connect(this.musicGain); o.start();
+    const o2 = this.ctx.createOscillator(); o2.type='square'; o2.frequency.value=220; const g2=this.ctx.createGain(); g2.gain.value=0.007; o2.connect(g2); g2.connect(this.musicGain); o2.start();
+    this._musicOsc = [o,o2];
   }
-  init(){
-    if(this.ctx) return;
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    this.master = this.ctx.createGain(); this.musicGain = this.ctx.createGain();
-    this.master.connect(this.ctx.destination); this.musicGain.connect(this.master);
-    this.master.gain.value = 0.9; this.musicGain.gain.value = 0.18;
-    this._startAmbient();
-  }
-  _startAmbient(){
-    // layered oscillators + subtle LFO for a casino-ish ambient
-    const o1 = this.ctx.createOscillator(); o1.type='sine'; o1.frequency.value=100;
-    const g1 = this.ctx.createGain(); g1.gain.value = 0.015; o1.connect(g1); g1.connect(this.musicGain); o1.start();
-    const o2 = this.ctx.createOscillator(); o2.type='sawtooth'; o2.frequency.value=220;
-    const g2 = this.ctx.createGain(); g2.gain.value = 0.006; o2.connect(g2); g2.connect(this.musicGain); o2.start();
-    // LFO on stereo-ish gain
-    this._musicNodes.push(o1,o2);
-  }
-  toggleMute(){ if(!this.ctx) this.init(); this.muted = !this.muted; this.master.gain.value = this.muted?0:0.9; return this.muted; }
-  sfx(type){
+  toggle(){ if(!this.ctx) this.init(); this.muted = !this.muted; this.master.gain.value = this.muted?0:0.9; return this.muted; }
+  play(type){
     if(!this.ctx) this.init();
     const t = this.ctx.currentTime;
-    if(type === 'coin'){
-      const o = this.ctx.createOscillator(); o.type='square'; o.frequency.setValueAtTime(1200,t);
-      const g = this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.linearRampToValueAtTime(0.28,t+0.02); g.gain.linearRampToValueAtTime(0.001,t+0.18);
-      o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.22);
-    }
-    if(type === 'shoot'){
-      const o = this.ctx.createOscillator(); o.type='sawtooth'; o.frequency.setValueAtTime(800,t);
-      const g = this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.linearRampToValueAtTime(0.2,t+0.01); g.gain.exponentialRampToValueAtTime(0.001,t+0.25);
-      o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.25);
-    }
-    if(type === 'hit'){
-      const o = this.ctx.createOscillator(); o.type='triangle'; o.frequency.setValueAtTime(240,t);
-      const g = this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.linearRampToValueAtTime(0.16,t+0.005); g.gain.linearRampToValueAtTime(0.001,t+0.12);
-      o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.18);
-    }
-    if(type === 'unlock'){
-      const o = this.ctx.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(600,t);
-      const g = this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.exponentialRampToValueAtTime(0.25,t+0.01); g.gain.exponentialRampToValueAtTime(0.001,t+0.5);
-      o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.5);
-    }
+    if(type==='coin'){ const o=this.ctx.createOscillator(); o.type='square'; o.frequency.setValueAtTime(1200,t); const g=this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.linearRampToValueAtTime(0.28,t+0.02); g.gain.linearRampToValueAtTime(0.001,t+0.18); o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.22); }
+    if(type==='shoot'){ const o=this.ctx.createOscillator(); o.type='sawtooth'; o.frequency.setValueAtTime(820,t); const g=this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.linearRampToValueAtTime(0.2,t+0.01); g.gain.exponentialRampToValueAtTime(0.001,t+0.25); o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.25); }
+    if(type==='hit'){ const o=this.ctx.createOscillator(); o.type='triangle'; o.frequency.setValueAtTime(240,t); const g=this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.linearRampToValueAtTime(0.16,t+0.005); g.gain.linearRampToValueAtTime(0.001,t+0.12); o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.18); }
+    if(type==='unlock'){ const o=this.ctx.createOscillator(); o.type='sine'; o.frequency.setValueAtTime(560,t); const g=this.ctx.createGain(); g.gain.setValueAtTime(0.001,t); g.gain.exponentialRampToValueAtTime(0.25,t+0.01); g.gain.exponentialRampToValueAtTime(0.001,t+0.5); o.connect(g); g.connect(this.master); o.start(); o.stop(t+0.5); }
   }
 }
-const SND = new AudioEngine();
+const SFX = new Sfx();
 
-// ---------- Phaser Game Config ----------
-const WIDTH = 900, HEIGHT = 640;
+// ---------- Phaser config ----------
+const WIDTH = 980, HEIGHT = 640;
 const config = {
   type: Phaser.AUTO,
-  parent: 'gameContainer',
+  parent: 'container',
   width: WIDTH,
   height: HEIGHT,
-  backgroundColor: '#07121a',
-  physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
-  scene: [BootScene, WorldScene, BossScene, UIScene] // Scenes are declared below; move definitions up
+  pixelArt: true,
+  roundPixels: true,
+  backgroundColor: '#050412',
+  physics: { default:'arcade', arcade:{ gravity:{y:800}, debug:false } },
+  scene: [ PreloadScene, GameScene, BossScene, UIScene ]
 };
 
-// We need to declare the scenes before using config; to keep structure readable, we'll define them now.
-// BUT JS requires function/class declarations before usage; we'll declare as function/class then create the game.
-
-function makeSpriteTexture(scene, key){
-  // Procedurally create textures with canvas for player, NPC, chips, etc.
-  const g = scene.textures.createCanvas(key, 64, 64);
-  const ctx2 = g.getContext();
-  ctx2.clearRect(0,0,64,64);
-  // base hat: draw top hat stylized
-  ctx2.fillStyle = '#111'; ctx2.fillRect(8,16,48,28); // body
-  ctx2.fillStyle = '#222'; ctx2.fillRect(4,38,56,10); // brim
-  ctx2.fillStyle = '#ffd166'; ctx2.fillRect(16,32,32,6); // ribbon
-  // small shine
-  ctx2.fillStyle = 'rgba(255,255,255,0.06)'; ctx2.fillRect(18,18,6,6);
-  scene.textures.addCanvas(key, g.canvas);
-  g.destroy();
+// ---------- Utility: generate pixel sprites on canvas and import to texture ----------
+function genHat(scene){
+  const g = scene.textures.createCanvas('hat_px', 32, 32);
+  const c = g.getContext();
+  c.fillStyle='#0b0b0d'; c.fillRect(6,6,20,14); c.fillStyle='#111'; c.fillRect(4,18,24,6); c.fillStyle='#ffd166'; c.fillRect(10,14,12,4); scene.textures.addCanvas('hat_px', g.canvas); g.destroy();
+}
+function genNpc(scene){
+  const g = scene.textures.createCanvas('npc_px', 24,24); const c=g.getContext();
+  c.fillStyle='#63c5d8'; c.fillRect(4,4,16,16); c.fillStyle='#073b4c'; c.fillRect(6,14,12,4); scene.textures.addCanvas('npc_px', g.canvas); g.destroy();
+}
+function genChip(scene){
+  const g = scene.textures.createCanvas('chip_px', 24,24); const c=g.getContext();
+  c.fillStyle='#ffd166'; c.beginPath(); c.arc(12,12,10,0,Math.PI*2); c.fill(); c.fillStyle='#b57a00'; c.fillRect(6,12,12,3); scene.textures.addCanvas('chip_px', g.canvas); g.destroy();
+}
+function genDoor(scene){
+  const g = scene.textures.createCanvas('door_px', 16,32); const c=g.getContext();
+  c.fillStyle='#392b22'; c.fillRect(0,0,16,32); c.fillStyle='#ffd166'; c.fillRect(6,12,4,3); scene.textures.addCanvas('door_px', g.canvas); g.destroy();
+}
+function genTile(scene, name, color){
+  const g = scene.textures.createCanvas(name, 32,32); const c=g.getContext();
+  c.fillStyle=color; c.fillRect(0,0,32,32); // add simple noise lines
+  c.fillStyle='rgba(255,255,255,0.04)';
+  for(let i=0;i<6;i++){ c.fillRect(0,i*5+ (i%2),32,1); }
+  scene.textures.addCanvas(name, g.canvas); g.destroy();
 }
 
-// ---------- BOOT SCENE: create textures and UI assets ----------
-class BootScene extends Phaser.Scene {
-  constructor(){ super({key:'BootScene'}); }
+// ---------- PreloadScene: create procedural textures then start GameScene ----------
+class PreloadScene extends Phaser.Scene {
+  constructor(){ super({key:'PreloadScene'}); }
   preload(){}
   create(){
-    // create a few procedural textures
-    makeSpriteTexture(this, 'hat');
-    // chip texture
-    const c = this.textures.createCanvas('chip', 48, 48); const cc = c.getContext();
-    cc.beginPath(); cc.fillStyle = '#ffd166'; cc.arc(24,24,18,0,Math.PI*2); cc.fill();
-    cc.fillStyle='#b57a00'; cc.fillRect(6,22,36,4); this.textures.addCanvas('chip', c.canvas); c.destroy();
-    // door texture
-    const d = this.textures.createCanvas('door', 64, 96); const dc = d.getContext();
-    dc.fillStyle='#3a2b1f'; dc.fillRect(0,0,64,96);
-    dc.fillStyle='#ffd166'; dc.fillRect(26,44,12,8); this.textures.addCanvas('door', d.canvas); d.destroy();
-    // npc texture
-    const n = this.textures.createCanvas('npc', 48,48); const nc = n.getContext();
-    nc.fillStyle='#8ecae6'; nc.fillRect(6,6,36,36); nc.fillStyle='#073b4c'; nc.fillRect(12,28,24,6);
-    this.textures.addCanvas('npc', n.canvas); n.destroy();
-    // small button
-    const btn = this.textures.createCanvas('btn', 120,40); const bc = btn.getContext();
-    bc.fillStyle = '#ff0044'; bc.fillRect(0,0,120,40); bc.fillStyle='#fff'; bc.font='18px monospace'; bc.fillText('START',30,26);
-    this.textures.addCanvas('btn', btn.canvas); btn.destroy();
-
-    // create a small spritesheet for animated neon lamp (we'll reuse)
-    const lamp = this.textures.createCanvas('lamp', 32,32); const lc = lamp.getContext();
-    lc.fillStyle='#ffd166'; lc.beginPath(); lc.arc(16,12,6,0,Math.PI*2); lc.fill();
-    this.textures.addCanvas('lamp', lamp.canvas); lamp.destroy();
-
-    // start world
-    this.scene.start('WorldScene');
-    this.scene.launch('UIScene'); // UI overlay
+    genHat(this); genNpc(this); genChip(this); genDoor(this);
+    genTile(this,'floor','#0b2130'); genTile(this,'wall','#0b0920');
+    // start other scenes
+    this.scene.start('GameScene');
+    this.scene.launch('UIScene');
   }
 }
 
-// ---------- WORLD SCENE: open casino map, exploration, doors, shop entry ----------
-class WorldScene extends Phaser.Scene {
-  constructor(){ super({key:'WorldScene'}); }
+// ---------- GameScene: world, player, shop, doors, exploration ----------
+class GameScene extends Phaser.Scene {
+  constructor(){ super({key:'GameScene'}); }
   create(){
-    // initialize audio on first input
-    this.input.once('pointerdown', ()=>{ SND.init(); }, this);
+    // ensure audio init on click first
+    this.input.once('pointerdown', ()=>SFX.init());
 
-    // world rectangle map comprised of rooms; build using groups
-    this.rooms = this.add.group();
-    this.doors = [];
-    // define rooms (these coordinates chosen to fit)
-    const rooms = {
-      lobby: {x:220,y:220,w:360,h:200, name:'Lobby'},
-      shop:  {x:40,y:380,w:180,h:200, name:'Loja'},
-      boss1: {x:40,y:60,w:180,h:180, name:'Dicey Don'},
+    // world: add tiled background (floor)
+    for(let y=0;y<HEIGHT;y+=32){
+      for(let x=0;x<WIDTH;x+=32){
+        this.add.image(x,y,'floor').setOrigin(0).setDisplaySize(32,32).setDepth(0);
+      }
+    }
+    // define rooms rectangles and visuals
+    this.rooms = {
+      lobby: {x:260,y:220,w:420,h:220, name:'Lobby'},
+      shop:  {x:80,y:380,w:160,h:160, name:'Loja'},
+      boss1: {x:80,y:60,w:160,h:160, name:'Dicey Don'},
       boss2: {x:360,y:20,w:260,h:140, name:'Lady Spade'},
-      boss3: {x:660,y:60,w:180,h:180, name:'Slotty Trio'},
-      final: {x:320,y:-80,w:260,h:160, name:'Sala do Dono', locked:true}
+      boss3: {x:700,y:80,w:160,h:160, name:'Slotty Trio'},
+      final: {x:360,y:-100,w:260,h:160, name:'Sala do Dono', locked:true}
     };
-    this.roomDefs = rooms;
-
-    // draw rooms visually as containers with background rectangles
-    for(const k in rooms){
-      const r = rooms[k];
-      const g = this.add.graphics();
-      g.fillStyle(k==='lobby' ? 0x0a2433 : (k==='shop' ? 0x151234 : 0x071225), 0.98);
-      g.fillRoundedRect(r.x, r.y, r.w, r.h, 12);
-      g.lineStyle(2, 0xffffff, 0.05); g.strokeRoundedRect(r.x, r.y, r.w, r.h, 12);
-      // label
-      const label = this.add.text(r.x+8, r.y+12, r.name, {font:'14px monospace', color:'#dfeffb'}).setDepth(30);
-      this.rooms.add(g);
+    // draw room borders
+    for(const k in this.rooms){
+      const r = this.rooms[k];
+      const g = this.add.graphics(); g.fillStyle(0x071a22); g.fillRoundedRect(r.x, r.y, r.w, r.h, 8);
+      g.lineStyle(2,0xffffff,0.04); g.strokeRoundedRect(r.x,r.y,r.w,r.h,8);
+      this.add.text(r.x+8,r.y+8,r.name,{font:'12px monospace',color:'#dfeffb'}).setDepth(5);
     }
 
-    // doors: interactive rectangles - store them
-    const pushDoor = (x,y,w,h,target)=>{ const rect = new Phaser.Geom.Rectangle(x,y,w,h); this.doors.push({rect,target}); };
-    pushDoor(rooms.shop.x + rooms.shop.w - 16, rooms.shop.y + rooms.shop.h/2 - 24, 16, 48, 'shop');
-    pushDoor(rooms.boss1.x + rooms.boss1.w - 16, rooms.boss1.y + rooms.boss1.h/2 - 24, 16, 48, 'boss1');
-    pushDoor(rooms.boss2.x + rooms.boss2.w - 16, rooms.boss2.y + rooms.boss2.h/2 - 24, 16, 48, 'boss2');
-    pushDoor(rooms.boss3.x, rooms.boss3.y + rooms.boss3.h/2 - 24, 16, 48, 'boss3');
-    pushDoor(rooms.final.x + rooms.final.w/2 - 40, rooms.final.y + rooms.final.h, 80, 24, 'final');
+    // doors (Phaser.Rect used for checking)
+    this.doors = [];
+    const dpush = (x,y,w,h,target)=>{ const rr = new Phaser.Geom.Rectangle(x,y,w,h); const spr = this.add.image(x,y,'door_px').setOrigin(0).setDisplaySize(w,h).setDepth(5); this.doors.push({rect:rr,target,spr}); };
+    dpush(this.rooms.shop.x + this.rooms.shop.w - 16, this.rooms.shop.y + this.rooms.shop.h/2 - 24, 16,48,'shop');
+    dpush(this.rooms.boss1.x + this.rooms.boss1.w - 16, this.rooms.boss1.y + this.rooms.boss1.h/2 - 24, 16,48,'boss1');
+    dpush(this.rooms.boss2.x + this.rooms.boss2.w - 16, this.rooms.boss2.y + this.rooms.boss2.h/2 - 24, 16,48,'boss2');
+    dpush(this.rooms.boss3.x, this.rooms.boss3.y + this.rooms.boss3.h/2 - 24, 16,48,'boss3');
+    dpush(this.rooms.final.x + this.rooms.final.w/2 - 40, this.rooms.final.y + this.rooms.final.h, 80, 24,'final');
 
-    // Draw door sprites for visual
-    for(const d of this.doors){
-      const doorSpr = this.add.image(d.rect.x, d.rect.y, 'door').setOrigin(0,0).setDisplaySize(d.rect.width, d.rect.height).setAlpha(0.95);
-    }
-
-    // lamps & neon fx
-    this.lightsGroup = this.add.group();
+    // lights/neon (animated)
+    this.lamps = this.add.group();
     for(let i=0;i<8;i++){
-      const lx = 80 + i*100, ly = 40;
-      const lamp = this.add.image(lx, ly, 'lamp').setScale(1.2).setAlpha(0.9);
-      this.lightsGroup.add(lamp);
+      const lx = 60 + i*110; const ly = 40;
+      const lamp = this.add.rectangle(lx,ly,12,12,0xffd166).setAlpha(0.9);
+      this.lamps.add(lamp);
+      this.tweens.add({targets:lamp, alpha: {from:0.5, to:1}, duration:800 + i*60, yoyo:true, loop:-1, ease:'Sine.easeInOut'});
     }
 
-    // player sprite
-    this.player = this.physics.add.sprite( rooms.lobby.x + rooms.lobby.w/2, rooms.lobby.y + rooms.lobby.h/2, 'hat' );
-    this.player.setDisplaySize(48,48);
+    // player setup (sprite uses pixel texture)
+    this.player = this.physics.add.sprite(this.rooms.lobby.x + this.rooms.lobby.w/2, this.rooms.lobby.y + this.rooms.lobby.h/2, 'hat_px').setDisplaySize(36,36);
     this.player.setCollideWorldBounds(true);
-    this.player.speed = 160;
-    // small player overlay "shadow" separate for stylized look
-    this.playerShadow = this.add.ellipse(this.player.x+6, this.player.y+26, 36, 10, 0x000000, 0.25);
+    this.player.body.setSize(28,32);
+    this.player.speed = 180;
+    this.player.canDash = true;
+    this.player.dashing = false;
+    this.player.damage = 10;
+    this.player.hp = 140;
+    this.player.coins = 0;
+    this.player.keys = 0;
 
-    // simple NPC in lobby
-    this.npc = this.physics.add.sprite(rooms.lobby.x+36, rooms.lobby.y+36,'npc').setDisplaySize(44,44).setImmovable(true);
+    // shadow
+    this.shadow = this.add.ellipse(this.player.x, this.player.y + 18, 26, 8, 0x000000, 0.25).setDepth(1);
+
+    // npc
+    this.npc = this.physics.add.sprite(this.rooms.lobby.x + 40, this.rooms.lobby.y + 40, 'npc_px').setDisplaySize(32,32).setImmovable(true);
     this.npc.body.setAllowGravity(false);
 
-    // camera static but we keep everything inside canvas; we'll not implement camera movement for simplicity
-    // Input
-    this.cursors = this.input.keyboard.addKeys({up:'W',down:'S',left:'A',right:'D',up2:Phaser.Input.Keyboard.KeyCodes.UP,down2:Phaser.Input.Keyboard.KeyCodes.DOWN,left2:Phaser.Input.Keyboard.KeyCodes.LEFT,right2:Phaser.Input.Keyboard.KeyCodes.RIGHT,interact:Phaser.Input.Keyboard.KeyCodes.E,shoot:Phaser.Input.Keyboard.KeyCodes.K,shop:Phaser.Input.Keyboard.KeyCodes.L,mute:Phaser.Input.Keyboard.KeyCodes.M});
+    // chips (collectible placed as decoration)
+    this.chips = this.physics.add.staticGroup();
+    const c1 = this.chips.create(this.rooms.lobby.x+60, this.rooms.lobby.y+120, 'chip_px').setDisplaySize(18,18);
+    c1.setData('hint','CoinPile');
 
-    // bullets group
-    this.bullets = this.physics.add.group();
+    // bullets group for player and enemy
+    this.pBullets = this.physics.add.group();
+    this.eBullets = this.physics.add.group();
 
-    // collisions (player & npc)
-    this.physics.add.overlap(this.player, this.npc, ()=>{ this.showDialog("NPC: Ei, apostador! Fale comigo (E)."); }, null, this);
+    // input keys
+    this.keys = this.input.keyboard.addKeys({left:'A',right:'D',up:'W',down:'S',jump:Phaser.Input.Keyboard.KeyCodes.SPACE,dash:Phaser.Input.Keyboard.KeyCodes.SHIFT,interact:Phaser.Input.Keyboard.KeyCodes.E,shoot:Phaser.Input.Keyboard.KeyCodes.K,shop:Phaser.Input.Keyboard.KeyCodes.L,mute:Phaser.Input.Keyboard.KeyCodes.M});
 
-    // simple collision world bounds
-    this.player.setDepth(5);
+    // collisions
+    this.physics.add.overlap(this.pBullets, this.eBullets, (p,e)=>{ /* bullets collide */ }, null, this);
+    this.physics.add.overlap(this.player, this.chips, (pl,ch)=>{ SFX.play('coin'); pl.coins += 10; ch.destroy(); this.scene.get('UIScene').events.emit('hudUpdate'); }, null, this);
 
-    // state trackers
-    this.keysCollected = 0;
+    // world variables
     this.keysNeeded = 3;
     this.defeated = {dice:false,lady:false,slot:false,stack:false};
 
-    // small UI hint
-    this.hint = this.add.text(WIDTH/2, HEIGHT-28, 'Use E para interagir / entrar', {font:'14px monospace', color:'#dfeffb'}).setOrigin(0.5).setAlpha(0.7);
+    // shortcuts: show dialog
+    this.showDialog("Você entrou no Cassino. Explore, fale com NPCs e derrote bosses para coletar chaves.");
 
-    // start SND only after click; ensure audio init when user interacts
-    this.input.keyboard.on('keydown-M', ()=>{ const s = SND.toggleMute(); this.showDialog(s ? 'Som desligado' : 'Som ligado'); });
+    // link UI events
+    this.input.keyboard.on('keydown-M', ()=>{ const m = SFX.toggle(); this.showDialog(m?'Som desligado':'Som ligado'); });
+
+    // handle interact key
+    this.input.keyboard.on('keydown-E', ()=>{ this.attemptInteract(); });
+
+    // init camera bounds
+    this.cameras.main.setBounds(0, -140, WIDTH, HEIGHT+280);
+    // no actual camera following to keep map static; we keep player on canvas.
+
+    // update UI
+    this.scene.get('UIScene').events.emit('hudUpdate');
   }
 
   update(time, dt){
-    const speed = this.player.speed;
-    let vx=0, vy=0;
-    if(this.cursors.left.isDown || this.cursors.left2.isDown) vx = -1;
-    if(this.cursors.right.isDown || this.cursors.right2.isDown) vx = 1;
-    if(this.cursors.up.isDown || this.cursors.up2.isDown) vy = -1;
-    if(this.cursors.down.isDown || this.cursors.down2.isDown) vy = 1;
-    const len = Math.hypot(vx,vy) || 1;
-    this.player.x += (vx/len) * speed * (dt/1000);
-    this.player.y += (vy/len) * speed * (dt/1000);
-    this.playerShadow.x = this.player.x + 6; this.playerShadow.y = this.player.y + 26;
-
+    // movement with dash/jump like Cuphead: responsive, small inertia
+    const onGround = true; // top-down style with gravity disabled in exploration (we set gravity in physics but we can emulate top-down moves)
+    let vx = 0, vy = 0;
+    if(this.keys.left.isDown || this.keys.left2 && this.keys.left2.isDown) vx = -1;
+    if(this.keys.right.isDown || this.keys.right2 && this.keys.right2.isDown) vx = 1;
+    if(this.keys.up.isDown || this.keys.up2 && this.keys.up2.isDown) vy = -1;
+    if(this.keys.down.isDown || this.keys.down2 && this.keys.down2.isDown) vy = 1;
+    const norm = Math.hypot(vx,vy) || 1;
+    // dash
+    if(Phaser.Input.Keyboard.JustDown(this.keys.dash) && this.player.canDash){
+      this.player.dashing = true; this.player.canDash = false;
+      const dashVel = 520;
+      this.player.body.setVelocity((vx||1)/norm * dashVel, (vy||0)/norm * dashVel);
+      this.tweens.add({targets:this.player, duration:220, props:{}, onComplete: ()=>{ this.player.dashing=false; this.player.body.setVelocity(0); this.time.delayedCall(600, ()=>{ this.player.canDash = true; }); }});
+      SFX.play('hit');
+    } else if(!this.player.dashing){
+      // normal move
+      this.player.body.setVelocity((vx/norm) * this.player.speed, (vy/norm) * this.player.speed);
+    }
     // shoot
-    if(Phaser.Input.Keyboard.JustDown(this.cursors.shoot)){
+    if(Phaser.Input.Keyboard.JustDown(this.keys.shoot)){
       this.fireBullet();
     }
 
-    // interact with doors/NPC: E
-    if(Phaser.Input.Keyboard.JustDown(this.cursors.interact)){
-      this.tryInteract();
-    }
-    // open shop when inside and press L
-    if(Phaser.Input.Keyboard.JustDown(this.cursors.shop)){
-      // check if inside shop bounds
-      if(this.overlapRoom('shop')){ this.startShop(); }
-    }
+    // update shadow
+    this.shadow.x = this.player.x; this.shadow.y = this.player.y + 18;
 
-    // update hint visibility based on proximity to any door
-    let nearAny=false;
-    for(const d of this.doors){
-      if(Phaser.Geom.Rectangle.ContainsRect(d.rect, new Phaser.Geom.Rectangle(this.player.x, this.player.y, this.player.width, this.player.height)) || Phaser.Geom.Rectangle.Overlaps(d.rect, new Phaser.Geom.Rectangle(this.player.x, this.player.y, this.player.width, this.player.height))){
-        nearAny = true; break;
-      }
-      // simpler proximity
-      if(Phaser.Geom.Rectangle.Overlaps(d.rect, new Phaser.Geom.Rectangle(this.player.x, this.player.y, this.player.width, this.player.height))) { nearAny = true; break; }
-    }
-    this.hint.setAlpha(nearAny ? 0.95 : 0.45);
+    // bullets vs enemies (handled in boss scene mostly)
+
+    // hint/draw door prompt via UIScene
+    this.checkProximityToDoors();
+
+    // update HUD
+    this.scene.get('UIScene').events.emit('hudUpdate');
   }
 
   fireBullet(){
-    // create bullet sprite as plain rectangle via graphics texture
-    const b = this.add.rectangle(this.player.x + 12, this.player.y - 6, 8, 8, 0xffffff);
-    this.physics.add.existing(b);
-    b.body.setVelocityY(-420);
-    b.body.setAllowGravity(false);
-    b.fromPlayer = true;
-    this.bullets.add(b);
-    SND.sfx('shoot');
-    // bullet-life destroy
-    this.time.delayedCall(2000, ()=>{ if(b && b.destroy) b.destroy(); });
+    const b = this.pBullets.create(this.player.x, this.player.y - 14, null);
+    b.setDisplaySize(6,6); b.body.setAllowGravity(false);
+    b.setVelocityY(-420);
+    b.setTint(0xffffff);
+    SFX.play('shoot');
+    this.time.delayedCall(2200, ()=>{ if(b && b.destroy) b.destroy(); });
   }
 
-  overlapRoom(roomKey){
-    const r = this.roomDefs[roomKey];
-    return (this.player.x > r.x && this.player.x < r.x + r.w && this.player.y > r.y && this.player.y < r.y + r.h);
-  }
-
-  tryInteract(){
-    // interact with NPC first
+  attemptInteract(){
+    // NPC
     if(Phaser.Geom.Intersects.RectangleToRectangle(this.player.getBounds(), this.npc.getBounds())){
-      this.showDialog('NPC: Boa sorte! Derrote 3 bosses e pegue as chaves para a Sala do Dono. Lembre-se de visitar a loja.');
+      this.showDialog('NPC: "Que tal enfrentar alguns bosses? Cada boss dá uma chave."');
       return;
     }
     // doors
     for(const d of this.doors){
-      if(Phaser.Geom.Rectangle.Overlaps(d.rect, this.player.getBounds()) || Phaser.Geom.Rectangle.Contains(d.rect, this.player.x, this.player.y)){
-        if(d.target === 'shop'){ this.startShop(); return; }
-        if(d.target.startsWith('boss')){ this.enterBoss(d.target); return; }
-        if(d.target === 'final'){
-          if(this.keysCollected >= this.keysNeeded){ this.unlockFinalAndEnter(); } else {
-            this.showDialog(`A porta está trancada. Chaves: ${this.keysCollected}/${this.keysNeeded}`);
-          }
+      if(Phaser.Geom.Rectangle.ContainsPoint(d.rect, this.player.getCenter())){
+        if(d.target === 'shop'){ this.scene.get('UIScene').events.emit('openShop'); return; }
+        if(d.target.startsWith('boss')){
+          let boss = null;
+          if(d.target==='boss1') boss='dice';
+          if(d.target==='boss2') boss='lady';
+          if(d.target==='boss3') boss='slot';
+          if(this.defeated[boss]){ this.showDialog('Você já derrotou este boss.'); return; }
+          // launch boss scene
+          this.scene.pause(); this.scene.launch('BossScene', { boss, callback: (won)=>{
+            if(won){ this.defeated[boss]=true; this.player.keys += 1; SFX.play('unlock'); this.showDialog('Você ganhou uma CHAVE! ('+this.player.keys+'/'+this.keysNeeded+')'); }
+            else this.showDialog('Você foi derrotado. Volte quando estiver pronto.');
+            this.scene.resume();
+            this.scene.get('UIScene').events.emit('hudUpdate');
+          }});
+          return;
+        }
+        if(d.target==='final'){
+          if(this.player.keys >= this.keysNeeded){ this.scene.pause(); this.scene.launch('BossScene', { boss:'stack', final:true, callback:(won)=>{ if(won) this.showDialog('Você venceu o dono! Fim.'); else this.showDialog('Derrota...'); this.scene.resume(); } }); }
+          else this.showDialog('Sala do Dono trancada. Pegue '+this.keysNeeded+' chaves.');
           return;
         }
       }
     }
-    this.showDialog('Nada para interagir aqui...');
+    this.showDialog('Nada para interagir aqui.');
   }
 
-  // start shop scene/overlay UI
-  startShop(){
-    // open a simple modal via UIScene events
-    this.scene.launch('UIScene', { openShop:true, parent:'world', onBuy:(item)=>{ /* handler not used here */ } });
-  }
-
-  enterBoss(target){
-    // map target mapping
-    let bossId = null;
-    if(target === 'boss1') bossId = 'dice';
-    if(target === 'boss2') bossId = 'lady';
-    if(target === 'boss3') bossId = 'slot';
-    if(this.defeated[bossId]){ this.showDialog(`Você já derrotou ${bossId.toUpperCase()}!`); return; }
-    // pause world and start BossScene with parameters
-    this.scene.pause();
-    this.scene.launch('BossScene', { boss: bossId, onComplete: (won)=>{
-      if(won){
-        this.keysCollected += 1;
-        SND.sfx('unlock');
-        this.defeated[bossId] = true;
-        this.showDialog(`Você ganhou uma chave! Chaves: ${this.keysCollected}/${this.keysNeeded}`);
-      } else {
-        this.showDialog('Você foi derrotado... volte quando estiver preparado.');
+  checkProximityToDoors(){
+    let near=false; for(const d of this.doors){
+      if(Phaser.Geom.Rectangle.ContainsPoint(d.rect, this.player.getCenter())){
+        near=true; break;
       }
-      this.scene.resume();
-    }});
+    }
+    this.scene.get('UIScene').events.emit('proximity', near);
   }
 
-  unlockFinalAndEnter(){
-    // start final boss
-    this.scene.pause();
-    this.scene.launch('BossScene', { boss: 'stack', final:true, onComplete:(won)=>{
-      if(won){
-        this.showDialog('Parabéns! Você derrotou o dono do cassino e libertou sua sorte! Reinicie para jogar de novo.');
-      } else {
-        this.showDialog('Você foi derrotado pelo Dono. Treine e volte.');
-      }
-      this.scene.resume();
-    }});
-  }
+  showDialog(text){ this.scene.get('UIScene').events.emit('showDialog', text); }
 
-  showDialog(text){
-    // send event to UIScene to display dialog
-    this.scene.get('UIScene').events.emit('showDialog', text);
-  }
-
-  init(){ /* define doors rectangles */
-    this.doors = [];
-    const r = this.roomDefs;
-    // helper to push doors with rects
-    const push = (x,y,w,h,target)=>{ const rect = new Phaser.Geom.Rectangle(x,y,w,h); this.doors.push({rect,target}); };
-    push(r.shop.x + r.shop.w - 20, r.shop.y + r.shop.h/2 - 24, 20, 48, 'shop');
-    push(r.boss1.x + r.boss1.w - 20, r.boss1.y + r.boss1.h/2 - 24, 20, 48, 'boss1');
-    push(r.boss2.x + r.boss2.w - 20, r.boss2.y + r.boss2.h/2 - 24, 20, 48, 'boss2');
-    push(r.boss3.x, r.boss3.y + r.boss3.h/2 - 24, 20, 48, 'boss3');
+  init(){ // called before create for doors setup
+    // prepare doors rects
+    this.doors = []; const r = this.rooms;
+    const push = (x,y,w,h,target)=>{ this.doors.push({rect:new Phaser.Geom.Rectangle(x,y,w,h), target}); };
+    push(r.shop.x + r.shop.w - 16, r.shop.y + r.shop.h/2 - 24, 16, 48, 'shop');
+    push(r.boss1.x + r.boss1.w - 16, r.boss1.y + r.boss1.h/2 - 24, 16, 48, 'boss1');
+    push(r.boss2.x + r.boss2.w - 16, r.boss2.y + r.boss2.h/2 - 24, 16, 48, 'boss2');
+    push(r.boss3.x, r.boss3.y + r.boss3.h/2 - 24, 16, 48, 'boss3');
     push(r.final.x + r.final.w/2 - 40, r.final.y + r.final.h, 80, 24, 'final');
   }
 }
 
-// ---------- BOSS SCENE: arena fight with unique bosses ----------
+// ---------- BossScene: improved boss fights with patterns & telegraphs ----------
 class BossScene extends Phaser.Scene {
   constructor(){ super({key:'BossScene'}); }
-  init(data){ this.bossId = data.boss; this.onComplete = data.onComplete || function(){}; this.final = data.final || false; }
+  init(data){ this.bossId = data.boss; this.callback = data.callback; this.isFinal = data.final || false; }
   create(){
-    // overlay: darken world (UIScene handles UI). We create an arena on this scene.
-    this.cameras.main.setBackgroundColor('#000000');
-    // simple background animated
-    this.bg = this.add.rectangle(0,0,WIDTH,HEIGHT,0x070814).setOrigin(0);
+    // takeover: dark overlay + arena sprites
+    this.cameras.main.setBackgroundColor('#05020a');
+    // small arena background
+    this.add.rectangle(0,0,WIDTH,HEIGHT,0x05020a).setOrigin(0);
 
-    // player avatar for boss scene (reset to center)
-    this.player = this.physics.add.sprite(WIDTH/2, HEIGHT-120, 'hat').setDisplaySize(56,56);
-    this.player.hp = 120;
-    this.player.damage = 14;
+    // player for boss scene (reset, arcade physics)
+    this.player = this.physics.add.sprite(WIDTH/2, HEIGHT-120, 'hat_px').setDisplaySize(36,36);
+    this.player.hp = 140; this.player.damage = 12;
     this.player.setCollideWorldBounds(true);
 
-    // boss setup
-    this.boss = null;
-    if(this.bossId === 'dice'){
-      this.boss = this.physics.add.sprite(WIDTH/2, 140, 'chip').setDisplaySize(160,160);
-      this.boss.hp = 180;
-      this.boss.type = 'dice';
-    } else if(this.bossId === 'lady'){
-      this.boss = this.physics.add.sprite(WIDTH/2, 120, 'npc').setDisplaySize(220,220); this.boss.hp = 260; this.boss.type='lady';
-    } else if(this.bossId === 'slot'){
-      // multiple slot parts
-      this.boss = this.add.container(WIDTH/2, 120);
-      const s1 = this.physics.add.sprite(-120,0,'chip').setDisplaySize(100,120); s1.hp=110; s1.type='slot';
-      const s2 = this.physics.add.sprite(0,0,'chip').setDisplaySize(100,120); s2.hp=110; s2.type='slot';
-      const s3 = this.physics.add.sprite(120,0,'chip').setDisplaySize(100,120); s3.hp=110; s3.type='slot';
-      this.boss.add([s1,s2,s3]); this.boss.hp = 330; this.boss.type='slot';
-    } else if(this.bossId === 'stack'){
-      this.boss = this.physics.add.sprite(WIDTH/2, 120, 'chip').setDisplaySize(340,200); this.boss.hp = 520; this.boss.type='stack';
-    }
+    // boss creation
+    this.enemies = this.physics.add.group();
+    if(this.bossId === 'dice'){ this.createDiceBoss(); }
+    if(this.bossId === 'lady'){ this.createLadyBoss(); }
+    if(this.bossId === 'slot'){ this.createSlotBoss(); }
+    if(this.bossId === 'stack'){ this.createStackBoss(); }
 
-    // group for boss bullets
-    this.ebullets = this.physics.add.group();
+    // bullets groups
+    this.pBullets = this.physics.add.group();
+    this.eBullets = this.physics.add.group();
 
-    // player bullets group
-    this.pbullets = this.physics.add.group();
+    // input keys
+    this.keys = this.input.keyboard.addKeys({left:'A',right:'D',up:'W',down:'S',shoot:Phaser.Input.Keyboard.KeyCodes.K, dash:Phaser.Input.Keyboard.KeyCodes.SHIFT});
 
-    // input
-    this.keys = this.input.keyboard.addKeys({left:'A',right:'D',up:'W',down:'S',shoot:Phaser.Input.Keyboard.KeyCodes.K,escape:Phaser.Input.Keyboard.KeyCodes.ESC});
+    // overlaps
+    this.physics.add.overlap(this.pBullets, this.enemies, (b,e)=>{ e.hp -= this.player.damage; b.destroy(); SFX.play('hit'); if(e.hp<=0) e.destroy(); }, null, this);
+    this.physics.add.overlap(this.eBullets, this.player, (b,p)=>{ p.hp -= 10; b.destroy(); SFX.play('hit'); }, null, this);
 
-    // collisions
-    // player bullet hits boss
-    this.physics.add.overlap(this.pbullets, this.boss instanceof Phaser.GameObjects.Container ? this.boss.getAll() : [this.boss], (b, targ)=>{
-      // reduce hp on the concrete target
-      if(targ.setTint){ targ.hp = targ.hp - this.player.damage; targ.setTint(0xff9999); this.time.delayedCall(80, ()=>targ.clearTint()); }
-      b.destroy();
-      SND.sfx('hit');
-    });
-    // enemy bullet hits player
-    this.physics.add.overlap(this.ebullets, this.player, (b,p)=>{
-      p.hp -= 10; b.destroy(); SND.sfx('hit');
-    });
+    // HUD
+    this.hpText = this.add.text(16,16,'Player HP: '+this.player.hp,{font:'16px monospace', color:'#fff'});
+    this.bossText = this.add.text(520,16,'Boss HP: ?', {font:'16px monospace', color:'#ffd166'});
 
-    // small HUD texts
-    this.hpText = this.add.text(20,20, 'Você HP: ' + this.player.hp, {font:'18px monospace', color:'#fff'});
-    this.bossText = this.add.text(600,20, 'Boss: ' + (this.boss.type||''), {font:'18px monospace', color:'#ffd166'});
+    // flash message
+    this.add.text(WIDTH/2, 20, 'BATALHA', {font:'20px monospace', color:'#ffd166'}).setOrigin(0.5);
 
-    // start boss behavior timers
+    // start pattern timers
+    this.patternTimer = 0;
     this.t = 0;
-    this.phase = 0;
 
-    // fade-in and dialog
-    this.cameras.main.fadeIn(400,0,0,0);
-    this.scene.get('UIScene').events.emit('showDialog', `Você entrou na sala do chefe: ${this.bossId.toUpperCase()}. Boa sorte!`);
+    // small fade
+    this.cameras.main.fadeIn(300);
   }
 
   update(time, delta){
-    const dt = delta/1000;
-    this.t += dt;
-
-    // player controls (simple)
+    const dt = delta/1000; this.t += dt;
+    // player controls (Cuphead-like dash)
     let vx=0, vy=0;
     if(this.keys.left.isDown) vx=-180;
     if(this.keys.right.isDown) vx=180;
     if(this.keys.up.isDown) vy=-180;
     if(this.keys.down.isDown) vy=180;
-    this.player.body.setVelocity(vx, vy);
-
+    this.player.body.setVelocity(vx,vy);
     // shoot
-    if(Phaser.Input.Keyboard.JustDown(this.keys.shoot)){
-      const b = this.physics.add.rectangle(this.player.x, this.player.y - 30, 10, 10, 0xffffff);
-      this.physics.add.existing(b);
-      b.body.setVelocityY(-420);
-      b.body.setAllowGravity(false);
-      this.pbullets.add(b);
-      SND.sfx('shoot');
-      this.time.delayedCall(2000, ()=>{ if(b && b.destroy) b.destroy(); });
-    }
+    if(Phaser.Input.Keyboard.JustDown(this.keys.shoot)){ this.shoot(); }
+    // enemy behaviour per type
+    if(this.bossId === 'dice'){ this.diceUpdate(dt); }
+    if(this.bossId === 'lady'){ this.ladyUpdate(dt); }
+    if(this.bossId === 'slot'){ this.slotUpdate(dt); }
+    if(this.bossId === 'stack'){ this.stackUpdate(dt); }
 
-    // boss attacks vary
-    if(this.bossId === 'dice'){
-      if(Math.random() < 0.02 + Math.min(0.05,this.t*0.002)){
-        // roll shockwave - spawn several bullets outward
-        const n = 6;
-        for(let i=0;i<n;i++){
-          const ang = (i/n) * Math.PI*2 + Math.random()*0.2;
-          const vx = Math.cos(ang) * (220 + Math.random()*80);
-          const vy = Math.sin(ang) * (220 + Math.random()*80);
-          const e = this.physics.add.rectangle(this.boss.x, this.boss.y, 12,12, 0xffaa00);
-          this.physics.add.existing(e); e.body.setVelocity(vx, vy); e.body.setAllowGravity(false);
-          this.ebullets.add(e);
-        }
-      }
-    } else if(this.bossId === 'lady'){
-      if(this.t % 1.1 < 0.02){
-        // spray toward player
-        const dx = this.player.x - this.boss.x; const dy = this.player.y - this.boss.y; const len = Math.hypot(dx,dy)||1;
-        for(let i=-2;i<=2;i++){
-          const angx = (dx/len) * 260 + i*40;
-          const angy = (dy/len) * 260 + i*20;
-          const e = this.physics.add.rectangle(this.boss.x, this.boss.y, 12,12, 0x99ddff);
-          this.physics.add.existing(e); e.body.setVelocity(angx + (Math.random()-0.5)*40, angy + (Math.random()-0.5)*40); e.body.setAllowGravity(false);
-          this.ebullets.add(e);
-        }
-      }
-    } else if(this.bossId === 'slot'){
-      // each child in container is a target
-      const children = this.boss.getAll();
-      if(Math.random() < 0.025){
-        for(const child of children){
-          const e = this.physics.add.rectangle(child.x + this.boss.x, child.y + this.boss.y + 40, 10, 10, 0x66a3ff);
-          this.physics.add.existing(e); e.body.setVelocity((Math.random()-0.5)*40, 260); e.body.setAllowGravity(false);
-          this.ebullets.add(e);
-        }
-      }
-    } else if(this.bossId === 'stack'){
-      if(Math.random() < 0.03){
-        const n = 10;
-        for(let i=0;i<n;i++){
-          const ang = -Math.PI/2 + (i/(n-1))*Math.PI;
-          const vx = Math.cos(ang) * (200 + Math.random()*80);
-          const vy = Math.sin(ang) * (200 + Math.random()*80);
-          const e = this.physics.add.rectangle(this.boss.x + (Math.random()-0.5)*100, this.boss.y + (Math.random()-0.2)*this.boss.displayHeight, 12,12, 0xffd166);
-          this.physics.add.existing(e); e.body.setVelocity(vx, vy); e.body.setAllowGravity(false);
-          this.ebullets.add(e);
-        }
+    // update HUD text
+    let totalHp=0;
+    this.enemies.getChildren().forEach(e=>{ totalHp += Math.max(0, e.hp||0); });
+    this.hpText.setText('Player HP: '+Math.max(0,Math.round(this.player.hp)));
+    this.bossText.setText('Boss HP: '+ Math.max(0,Math.round(totalHp)));
+
+    // win/lose
+    if(this.player.hp <= 0){ this.end(false); }
+    if(this.enemies.countActive(true) === 0){ this.end(true); }
+  }
+
+  shoot(){
+    const b = this.pBullets.create(this.player.x, this.player.y - 20, null).setDisplaySize(8,8);
+    b.body.setAllowGravity(false); b.setVelocityY(-420);
+    SFX.play('shoot');
+    this.time.delayedCall(2600, ()=>{ if(b && b.destroy) b.destroy(); });
+  }
+
+  createDiceBoss(){
+    const boss = this.enemies.create(WIDTH/2, 140, 'chip_px').setDisplaySize(140,140);
+    boss.hp = 220; boss.type='dice'; boss.t=0;
+    boss.setImmovable(true);
+    // telegraph ring sprite
+  }
+  diceUpdate(dt){
+    const boss = this.enemies.getChildren()[0];
+    boss.t += dt;
+    if(Math.random() < 0.012 + Math.min(0.03, boss.t*0.002)){
+      // burst bullets radial
+      const n = 10 + Math.floor(Math.random()*6);
+      for(let i=0;i<n;i++){
+        const ang = (i/n)*Math.PI*2 + (Math.random()-0.5)*0.2;
+        const vx = Math.cos(ang)*(220 + Math.random()*80);
+        const vy = Math.sin(ang)*(220 + Math.random()*80);
+        const e = this.eBullets.create(boss.x, boss.y, null).setDisplaySize(10,10);
+        e.body.setAllowGravity(false); e.body.setVelocity(vx,vy);
       }
     }
-
-    // check boss hp if container parts exist
-    if(this.bossId === 'slot' && this.boss.getAll){
-      let allDead = true;
-      for(const part of this.boss.getAll()){
-        if(part.hp > 0){
-          allDead = false;
-          break;
-        }
-      }
-      if(allDead){
-        this.win();
-      }
-    } else {
-      if(this.boss && this.boss.hp !== undefined && this.boss.hp <= 0){
-        this.win();
-      }
-    }
-
-    // remove bullets offscreen
-    this.ebullets.children.each((b)=>{ if(b.y > HEIGHT + 60 || b.y < -60 || b.x < -60 || b.x > WIDTH + 60) { if(b && b.destroy) b.destroy(); } });
-    this.pbullets.children.each((b)=>{ if(b.y > HEIGHT + 60 || b.y < -60) { if(b && b.destroy) b.destroy(); } });
-
-    // collisions: when player's bullets overlap boss children (container) we handle individually in overlaps set during create
-    // update hud
-    this.hpText.setText('Você HP: ' + Math.max(0, Math.round(this.player.hp)));
-    const bHp = (this.bossId === 'slot' ? this.getSlotHp() : (this.boss.hp || 0));
-    this.bossText.setText('Boss HP: ' + Math.max(0, Math.round(bHp)));
-    // lose condition
-    if(this.player.hp <= 0){
-      this.lose();
+    // occasional targeted shot
+    if(Math.random() < 0.02){
+      const dx = this.player.x - boss.x, dy = this.player.y - boss.y; const len=Math.hypot(dx,dy)||1;
+      const e = this.eBullets.create(boss.x, boss.y, null).setDisplaySize(10,10);
+      e.body.setAllowGravity(false); e.body.setVelocity((dx/len)*320, (dy/len)*320);
     }
   }
 
-  getSlotHp(){
-    let total = 0;
-    for(const part of this.boss.getAll()) total += Math.max(0, part.hp||0);
-    return total;
+  createLadyBoss(){
+    const boss = this.enemies.create(WIDTH/2, 120, 'npc_px').setDisplaySize(180,180);
+    boss.hp = 360; boss.type='lady'; boss.phase=0; boss.t=0;
+    boss.setImmovable(true);
+  }
+  ladyUpdate(dt){
+    const boss = this.enemies.getChildren()[0]; boss.t += dt;
+    if(Math.floor(boss.t*2) % 3 === 0 && Math.random() < 0.4){
+      // spiral of bullets
+      const centerX = boss.x, centerY = boss.y;
+      for(let i=0;i<12;i++){
+        const ang = (i/12)*Math.PI*2 + boss.t;
+        const vx = Math.cos(ang)*220, vy = Math.sin(ang)*220;
+        const e = this.eBullets.create(centerX, centerY, null).setDisplaySize(8,8);
+        e.body.setAllowGravity(false); e.body.setVelocity(vx+ (Math.random()-0.5)*40, vy + (Math.random()-0.5)*40);
+      }
+    }
+    // moving telegraph dash
+    if(Math.random() < 0.02){
+      const targetX = this.player.x + (Math.random()-0.5)*120;
+      this.tweens.add({targets:boss, x:targetX, duration:600, ease:'Cubic.easeInOut', yoyo:false});
+      // after tween, do radial burst
+      this.time.delayedCall(620, ()=>{
+        for(let i=0;i<8;i++){
+          const ang = (i/8)*Math.PI*2;
+          const e = this.eBullets.create(boss.x, boss.y, null).setDisplaySize(10,10);
+          e.body.setAllowGravity(false); e.body.setVelocity(Math.cos(ang)*320, Math.sin(ang)*320);
+        }
+      });
+    }
   }
 
-  win(){
-    // destroy all bullets
-    this.ebullets.clear(true,true); this.pbullets.clear(true,true);
-    // award depending on boss
-    this.scene.stop(); // stop boss scene
-    this.onFinish(true);
+  createSlotBoss(){
+    // three smaller slot children as separate sprites (container simulated by group)
+    const s1 = this.enemies.create(WIDTH/2-140, 140, 'chip_px').setDisplaySize(100,120); s1.hp=130; s1.type='slot';
+    const s2 = this.enemies.create(WIDTH/2, 140, 'chip_px').setDisplaySize(100,120); s2.hp=130; s2.type='slot';
+    const s3 = this.enemies.create(WIDTH/2+140, 140, 'chip_px').setDisplaySize(100,120); s3.hp=130; s3.type='slot';
   }
-  lose(){
-    this.ebullets.clear(true,true); this.pbullets.clear(true,true);
+  slotUpdate(dt){
+    const parts = this.enemies.getChildren();
+    if(Math.random() < 0.02){
+      for(const p of parts){
+        const e = this.eBullets.create(p.x, p.y + p.displayHeight/2, null).setDisplaySize(8,8);
+        e.body.setAllowGravity(false); e.body.setVelocity((Math.random()-0.5)*40, 260);
+      }
+    }
+  }
+
+  createStackBoss(){
+    const b = this.enemies.create(WIDTH/2, 120, 'chip_px').setDisplaySize(300,200);
+    b.hp = 620; b.type='stack';
+    b.setImmovable(true);
+  }
+  stackUpdate(dt){
+    const boss = this.enemies.getChildren()[0];
+    if(Math.random() < 0.03){
+      const n = 12;
+      for(let i=0;i<n;i++){
+        const ang = -Math.PI/2 + (i/(n-1))*Math.PI;
+        const vx = Math.cos(ang) * (240 + Math.random()*80);
+        const vy = Math.sin(ang) * (240 + Math.random()*80);
+        const e = this.eBullets.create(boss.x + (Math.random()-0.5)*160, boss.y + boss.displayHeight/2, null).setDisplaySize(10,10);
+        e.body.setAllowGravity(false); e.body.setVelocity(vx, vy);
+      }
+    }
+  }
+
+  end(won){
+    // run callback and stop
+    if(this.callback) this.callback(won);
     this.scene.stop();
-    this.onFinish(false);
-  }
-
-  onFinish(result){
-    // call parent callback via scene plugin data (passed in when launched)
-    if(this.sys.settings.data && this.sys.settings.data.onComplete){
-      try{ this.sys.settings.data.onComplete(result); } catch(e) {}
-    }
-    // stop this scene safely
   }
 }
 
-// ---------- UI SCENE: HUD, Dialog, Shop modal ----------
+// ---------- UIScene: DOM-based HUD, dialog & shop overlay ----------
 class UIScene extends Phaser.Scene {
   constructor(){ super({key:'UIScene', active:true}); }
-  preload(){}
-  create(data){
-    this.worldScene = this.scene.get('WorldScene');
-    // create a DOM element container for dialog UI
-    this.dialogDiv = document.createElement('div');
-    this.dialogDiv.style.position='absolute';
-    this.dialogDiv.style.right='12px';
-    this.dialogDiv.style.top='12px';
-    this.dialogDiv.style.width='300px';
-    this.dialogDiv.style.background='rgba(3,6,15,0.9)';
-    this.dialogDiv.style.border='1px solid rgba(255,255,255,0.04)';
-    this.dialogDiv.style.padding='12px';
-    this.dialogDiv.style.borderRadius='10px';
-    this.dialogDiv.style.fontFamily='monospace';
-    this.dialogDiv.style.color='#e6eef6';
-    this.dialogDiv.style.zIndex=1000;
-    this.dialogDiv.innerHTML = '<div id="dlgText">Bem-vindo ao Cassino do Destino</div><div id="dlgChoices"></div>';
-    document.body.appendChild(this.dialogDiv);
-    this.dlgText = this.dialogDiv.querySelector('#dlgText');
-    this.dlgChoices = this.dialogDiv.querySelector('#dlgChoices');
-    // listen to showDialog events
+  create(){
+    // create simple DOM overlay for HUD + dialog + shop
+    this.hud = document.createElement('div'); this.hud.style.position='absolute'; this.hud.style.left='12px'; this.hud.style.top='12px';
+    this.hud.style.background='rgba(0,0,0,0.35)'; this.hud.style.padding='8px 12px'; this.hud.style.borderRadius='8px'; this.hud.style.color='#ffd166'; this.hud.style.fontFamily='monospace'; this.hud.style.zIndex=999;
+    document.body.appendChild(this.hud);
+    this.hud.innerHTML = `<div id="hp">Vida: 0</div><div id="coins">Moedas: 0</div><div id="keys">Chaves: 0/3</div>`;
+
+    // dialog box
+    this.dialog = document.createElement('div'); this.dialog.style.position='absolute'; this.dialog.style.right='12px'; this.dialog.style.top='12px'; this.dialog.style.width='320px';
+    this.dialog.style.background='rgba(3,6,15,0.9)'; this.dialog.style.border='1px solid rgba(255,255,255,0.04)'; this.dialog.style.padding='12px'; this.dialog.style.borderRadius='10px';
+    this.dialog.style.fontFamily='monospace'; this.dialog.style.color='#e6eef6'; this.dialog.style.zIndex=999; this.dialog.innerHTML = `<div id="dialogText">Bem-vindo</div><div id="dialogChoices"></div>`;
+    document.body.appendChild(this.dialog);
+
+    // shop modal
+    this.shopModal = document.createElement('div'); Object.assign(this.shopModal.style,{position:'absolute',left:'50%',top:'50%',transform:'translate(-50%,-50%)',width:'420px',background:'rgba(2,8,20,0.98)',padding:'14px',borderRadius:'12px',display:'none',zIndex:1000,color:'#e6eef6',fontFamily:'monospace'});
+    this.shopModal.innerHTML = `<h3 style="margin:0 0 8px 0;color:#ffd166">Loja</h3><div id="shopItems"></div><div style="margin-top:12px"><button id="closeShop">Fechar</button></div>`; document.body.appendChild(this.shopModal);
+    this.shopItems = this.shopModal.querySelector('#shopItems'); this.shopModal.querySelector('#closeShop').addEventListener('click', ()=>{ this.shopModal.style.display='none'; });
+
+    // listen for update events
+    this.events.on('hudUpdate', ()=>{ this.updateHud(); }, this);
     this.events.on('showDialog', (txt)=>{ this.showDialog(txt); }, this);
+    this.events.on('openShop', ()=>{ this.openShop(); }, this);
+    this.events.on('proximity', (near)=>{ this.toggleDoorHint(near); }, this);
 
-    // shop modal (hidden)
-    this.shopModal = document.createElement('div');
-    this.shopModal.style.position='absolute'; this.shopModal.style.left='50%'; this.shopModal.style.top='50%';
-    this.shopModal.style.transform='translate(-50%,-50%)'; this.shopModal.style.width='420px'; this.shopModal.style.background='rgba(2,8,20,0.95)';
-    this.shopModal.style.border='1px solid rgba(255,255,255,0.06)'; this.shopModal.style.padding='14px'; this.shopModal.style.borderRadius='12px';
-    this.shopModal.style.display='none'; this.shopModal.style.zIndex=2000; this.shopModal.innerHTML = '<h3 style="margin:0 0 8px 0;color:#ffd166">Loja</h3><div id="shopItems"></div><div style="margin-top:12px"><button id="closeShop">Fechar</button></div>';
-    document.body.appendChild(this.shopModal);
-    this.shopItems = this.shopModal.querySelector('#shopItems');
-    this.shopModal.querySelector('#closeShop').addEventListener('click', ()=>{ this.shopModal.style.display='none'; });
+    // initial update
+    this.updateHud();
+  }
 
-    // shop inventory
-    this.shopInventory = [
-      { id:'hp+20', name:'+20 Vida', cost:12, apply:()=>{ this.worldScene.player.hp = Math.min(400, this.worldScene.player.hp + 20); } },
-      { id:'dmg+3', name:'+3 Dano', cost:20, apply:()=>{ this.worldScene.player.damage = (this.worldScene.player.damage||12) + 3; } },
-      { id:'coins+40', name:'Pack 40 moedas', cost:36, apply:()=>{ this.worldScene.player.coins = (this.worldScene.player.coins||0) + 40; } }
-    ];
-
-    // listen to SHOW SHOP request
-    this.events.on('showShop', ()=>{ this.openShop(); }, this);
-
-    // toggle mute on M from UI scene as backup
-    window.addEventListener('keydown', (e)=>{ if(e.key.toLowerCase()==='m'){ const s=SND.toggleMute(); this.showDialog(s ? 'Som desativado' : 'Som ativado'); } });
-
-    // click to enable audio on first click if not initialized
-    window.addEventListener('pointerdown', ()=>{ SND.init(); }, {once:true});
+  updateHud(){
+    const gs = this.scene.get('GameScene');
+    if(!gs) return;
+    this.hud.querySelector('#hp').textContent = `Vida: ${Math.round(gs.player.hp||0)}`;
+    this.hud.querySelector('#coins').textContent = `Moedas: ${Math.round(gs.player.coins||0)}`;
+    this.hud.querySelector('#keys').textContent = `Chaves: ${gs.player.keys||0}/3`;
   }
 
   showDialog(txt){
-    // typewriter effect
-    this.dlgChoices.innerHTML = '';
-    this.dlgText.textContent = '';
-    let i=0; const t = setInterval(()=>{ this.dlgText.textContent += txt.charAt(i++) || ''; if(i>txt.length){ clearInterval(t); } }, 10);
+    const el = this.dialog.querySelector('#dialogText'); el.textContent=''; let i=0;
+    const iv = setInterval(()=>{ el.textContent += txt.charAt(i++)||''; if(i>txt.length){ clearInterval(iv); } }, 12);
   }
 
   openShop(){
-    // build items
+    const gs = this.scene.get('GameScene'); if(!gs) return;
     this.shopItems.innerHTML = '';
-    const world = this.worldScene;
-    for(const it of this.shopInventory){
-      const row = document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.margin='6px 0';
+    const inventory = [
+      {id:'hp20', name:'+20 Vida', cost:15, apply:()=>{ gs.player.hp = Math.min(400, gs.player.hp + 20); }},
+      {id:'dmg4', name:'+4 Dano', cost:22, apply:()=>{ gs.player.damage += 4; }},
+      {id:'coins50', name:'+50 Moedas', cost:40, apply:()=>{ gs.player.coins += 50; }}
+    ];
+    inventory.forEach(it=>{
+      const row = document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.margin='8px 0';
       row.innerHTML = `<div><strong style="color:#ffd166">${it.name}</strong><br><small>${it.cost} moedas</small></div>`;
-      const btn = document.createElement('button'); btn.textContent='Comprar';
-      btn.onclick = ()=>{ if(world.player.coins >= it.cost){ world.player.coins -= it.cost; it.apply(); SND.sfx('coin'); this.showDialog('Compra realizada!'); } else { this.showDialog('Moedas insuficientes!'); } this.updateWorldHUD(); };
+      const btn = document.createElement('button'); btn.textContent='Comprar'; btn.onclick = ()=>{ if(gs.player.coins >= it.cost){ gs.player.coins -= it.cost; it.apply(); SFX.play('coin'); this.updateHud(); } else this.showDialog('Moedas insuficientes!'); }
       row.appendChild(btn); this.shopItems.appendChild(row);
-    }
+    });
     this.shopModal.style.display='block';
-    this.updateWorldHUD();
   }
 
-  updateWorldHUD(){ /* sync UI overlay with world scene if needed */ }
-
-  update(time, delta){
-    // sync small HUD in the DOM (not the Phaser canvas)
-    const ws = this.scene.get('WorldScene');
-    if(ws){
-      // quick update: world scene might set keys/coins
-      // we'll also reflect keys in dialog area small
-      this.dlgText.style.fontSize = '14px';
-    }
+  toggleDoorHint(near){
+    // small visual cue integrated in HUD if near
+    if(near) this.hud.style.boxShadow = '0 0 10px rgba(255,209,102,0.06)';
+    else this.hud.style.boxShadow = 'none';
   }
 }
 
-// Now create the game after declaring classes
-const game = new Phaser.Game( (function(){
-  // need to return full config with scenes as references
-  return {
-    type: Phaser.AUTO,
-    parent: 'gameContainer',
-    width: WIDTH,
-    height: HEIGHT,
-    backgroundColor: '#07121a',
-    physics: { default: 'arcade', arcade: { gravity: { y: 0 }, debug: false } },
-    scene: [ BootScene, WorldScene, BossScene, UIScene ]
-  };
-})() );
+// ---------- Start game ----------
+const game = new Phaser.Game(config);
 
-// Small helper: wire events to launch shop from WorldScene (it calls scene.launch('UIScene',{openShop:true}))
-// Add a small check: if world scene triggers shop via events, show UI's shop
-game.events.on('ready', ()=>{ /* not used */ });
+// expose SFX to console for debug
+window.SFX = SFX;
 
-// Final polish: ensure the DOM note hides on focus
-document.addEventListener('pointerdown', ()=>{ const n = document.getElementById('note'); if(n) n.style.display='none'; });
+// small helper: hide note after pointerdown
+document.addEventListener('pointerdown', ()=>{ const n=document.getElementById('note'); if(n) n.style.display='none'; }, {once:true});
 
 </script>
 </body>
